@@ -30,3 +30,11 @@
 *.exe
 *.out
 *.app
+
+# Compile results
+build/**
+
+# Logs
+OblivionLogs.txt
+
+Shaders/*

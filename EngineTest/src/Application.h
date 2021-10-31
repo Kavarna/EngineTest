@@ -18,6 +18,7 @@ public:
     virtual bool OnRender(ID3D12GraphicsCommandList *cmdList, FrameResources *frameResources) override;
     virtual bool OnRenderGUI() override;
     virtual bool OnResize() override;
+    virtual std::unordered_map<void *, uint32_t> GetInstanceCount() override;
 
     virtual uint32_t GetModelCount() override;
     virtual ID3D12PipelineState *GetBeginFramePipeline() override;

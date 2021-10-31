@@ -32,7 +32,7 @@ bool Application::OnRender(ID3D12GraphicsCommandList *cmdList, FrameResources *f
     auto d3d = Direct3D::Get();
     FLOAT backgroundColor[4] = { 0.0f, 0.0f, 0.0f, 1.0f };
 
-    auto pipelineResult = PipelineManager::Get()->GetPipeline(PipelineType::MaterialLight);
+    auto pipelineResult = PipelineManager::Get()->GetPipelineAndRootSignature(PipelineType::MaterialLight);
     CHECK(pipelineResult.Valid(), false, "Unable to retrieve pipeline and root signature");
     auto [pipeline, rootSignature] = pipelineResult.Get();
 
@@ -83,6 +83,11 @@ bool Application::OnResize()
     return true;
 }
 
+std::unordered_map<void *, uint32_t> Application::GetInstanceCount()
+{
+    return std::unordered_map<void *, uint32_t>();
+}
+
 uint32_t Application::GetModelCount()
 {
     return (uint32_t)mModels.size();
@@ -96,6 +101,7 @@ ID3D12PipelineState *Application::GetBeginFramePipeline()
 bool Application::InitModels(ID3D12GraphicsCommandList *initializationCmdList, ID3D12CommandAllocator *cmdAllocator)
 {
     auto d3d = Direct3D::Get();
+    auto materialManager = MaterialManager::Get();
     CHECK_HR(cmdAllocator->Reset(), false);
     CHECK_HR(initializationCmdList->Reset(cmdAllocator, nullptr), false);
 
@@ -106,6 +112,16 @@ bool Application::InitModels(ID3D12GraphicsCommandList *initializationCmdList, I
     mModels.emplace_back(Direct3D::kBufferCount, 1);
     CHECK(mModels.back().Create("Resources\\Cube.obj"), false, "Unable to load Cube");
     mModels.back().Translate(-2.0f, 0.0f, 0.0f);
+
+    mModels.emplace_back(Direct3D::kBufferCount, 2);
+    Model::GridInitializationInfo gridInfo;
+    gridInfo.width = 100.f;
+    gridInfo.depth = 100.f;
+    gridInfo.N = 10;
+    gridInfo.M = 10;
+    CHECK(mModels.back().Create(Model::ModelType::Grid, gridInfo), false, "Unable to create grid");
+    mModels.back().SetMaterial(materialManager->AddDefaultMaterial(Direct3D::kBufferCount));
+    mModels.back().Translate(0.0f, -1.0f, 0.0f);
 
     ComPtr<ID3D12Resource> intermediaryResources[2];
     CHECK(Model::InitBuffers(initializationCmdList, intermediaryResources), false, "Unable to initialize buffers for models");

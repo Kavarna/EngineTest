@@ -30,11 +30,12 @@ bool Application::OnUpdate(FrameResources *frameResources, float dt)
 bool Application::OnRender(ID3D12GraphicsCommandList *cmdList, FrameResources *frameResources)
 {
     auto d3d = Direct3D::Get();
+    auto pipelineManager = PipelineManager::Get();
     FLOAT backgroundColor[4] = { 0.0f, 0.0f, 0.0f, 1.0f };
 
-    auto pipelineResult = PipelineManager::Get()->GetPipelineAndRootSignature(PipelineType::MaterialLight);
-    CHECK(pipelineResult.Valid(), false, "Unable to retrieve pipeline and root signature");
-    auto [pipeline, rootSignature] = pipelineResult.Get();
+    auto pipelineSignatureResult = pipelineManager->GetPipelineAndRootSignature(PipelineType::MaterialLight);
+    CHECK(pipelineSignatureResult.Valid(), false, "Unable to retrieve pipeline and root signature");
+    auto [pipeline, rootSignature] = pipelineSignatureResult.Get();
 
     cmdList->RSSetViewports(1, &mViewport);
     cmdList->RSSetScissorRects(1, &mScissors);
@@ -52,7 +53,31 @@ bool Application::OnRender(ID3D12GraphicsCommandList *cmdList, FrameResources *f
 
     Model::Bind(cmdList);
 
-    RenderModels(cmdList, frameResources);
+    mGrid->SetShouldRender(false);
+    cmdList->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
+    RenderModels(cmdList, frameResources,
+                 [](Model * m) -> bool
+                 {
+                     auto oldShouldRender = m->ShouldRender();
+                     m->SetShouldRender(false);
+                     return oldShouldRender;
+                 });
+
+    
+    auto pipelineResult = pipelineManager->GetPipeline(PipelineType::Terrain);
+    CHECK(pipelineResult.Valid(), false, "Unable to get terrain pipeline");
+    pipeline = pipelineResult.Get();
+    cmdList->SetPipelineState(pipeline);
+    mGrid->SetShouldRender(true);
+    cmdList->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_4_CONTROL_POINT_PATCHLIST);
+    RenderModels(cmdList, frameResources,
+                 [](Model *m) -> bool
+                 {
+                     auto oldShouldRender = m->ShouldRender();
+                     m->SetShouldRender(true);
+                     return oldShouldRender;
+                 });
+
 
 
     return true;
@@ -115,13 +140,15 @@ bool Application::InitModels(ID3D12GraphicsCommandList *initializationCmdList, I
 
     mModels.emplace_back(Direct3D::kBufferCount, 2);
     Model::GridInitializationInfo gridInfo;
-    gridInfo.width = 100.f;
-    gridInfo.depth = 100.f;
-    gridInfo.N = 10;
-    gridInfo.M = 10;
-    CHECK(mModels.back().Create(Model::ModelType::Grid, gridInfo), false, "Unable to create grid");
+    gridInfo.width = 10.f;
+    gridInfo.depth = 10.f;
+    gridInfo.N = 2;
+    gridInfo.M = 2;
+    CHECK(mModels.back().CreatePrimitive(gridInfo), false, "Unable to create grid");
     mModels.back().SetMaterial(materialManager->AddDefaultMaterial(Direct3D::kBufferCount));
     mModels.back().Translate(0.0f, -1.0f, 0.0f);
+    mModels.back().Scale(5.f);
+    mGrid = &mModels.back();
 
     ComPtr<ID3D12Resource> intermediaryResources[2];
     CHECK(Model::InitBuffers(initializationCmdList, intermediaryResources), false, "Unable to initialize buffers for models");
@@ -200,6 +227,8 @@ void Application::UpdateCamera(FrameResources *frameResources)
         mappedMemory->View = DirectX::XMMatrixTranspose(mCamera.GetView());
         mappedMemory->Projection = DirectX::XMMatrixTranspose(mCamera.GetProjection());
 
+        mappedMemory->CameraPosition = mCamera.GetPosition();
+
         mCamera.DirtyFrames--;
     }
 }
@@ -218,7 +247,7 @@ void Application::UpdateModels(FrameResources *frameResources)
     }
 }
 
-void Application::RenderModels(ID3D12GraphicsCommandList *cmdList, FrameResources *frameResources)
+void Application::RenderModels(ID3D12GraphicsCommandList *cmdList, FrameResources *frameResources, std::function<bool(Model *)> callback)
 {
     auto textureManager = TextureManager::Get();
 
@@ -229,6 +258,7 @@ void Application::RenderModels(ID3D12GraphicsCommandList *cmdList, FrameResource
 
     for (unsigned int i = 0; i < mModels.size(); ++i)
     {
+        CHECKCONT(callback(&mModels[i]), "");
         auto perObjectBufferAddress = frameResources->PerObjectBuffers.GetGPUVirtualAddress();
         perObjectBufferAddress += mModels[i].ConstantBufferIndex * frameResources->PerObjectBuffers.GetElementSize();
         cmdList->SetGraphicsRootConstantBufferView(0, perObjectBufferAddress);

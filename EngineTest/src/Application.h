@@ -31,10 +31,11 @@ private:
     void UpdateCamera(FrameResources *frameResources);
     void UpdateModels(FrameResources *frameResources);
 
-    void RenderModels(ID3D12GraphicsCommandList *cmdList, FrameResources *frameResources);
+    void RenderModels(ID3D12GraphicsCommandList *cmdList, FrameResources *frameResources, std::function<bool(Model *)> callback);
 
 private:
     std::vector<Model> mModels;
+    Model *mGrid;
 
     SceneLight mSceneLight;
 

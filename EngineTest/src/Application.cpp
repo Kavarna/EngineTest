@@ -11,7 +11,7 @@ Application::Application() :
 bool Application::OnInit(ID3D12GraphicsCommandList *initializationCmdList, ID3D12CommandAllocator *cmdAllocator)
 {
     mSceneLight.SetAmbientColor(0.2f, 0.2f, 0.2f, 1.0f);
-    mSceneLight.AddDirectionalLight("Sun", { 0.0f,-1.0f, 1.0f }, { 0.6f, 0.6f, 0.6f });
+    mSceneLight.AddDirectionalLight("Sun", { -1.0f,-1.0f, 1.0f }, { 0.6f, 0.6f, 0.6f });
     
     CHECK(InitModels(initializationCmdList, cmdAllocator), false, "Unable to initialize all models");
 
@@ -142,10 +142,11 @@ bool Application::InitModels(ID3D12GraphicsCommandList *initializationCmdList, I
     Model::GridInitializationInfo gridInfo;
     gridInfo.width = 10.f;
     gridInfo.depth = 10.f;
-    gridInfo.N = 2;
-    gridInfo.M = 2;
+    gridInfo.N = 5;
+    gridInfo.M = 5;
     CHECK(mModels.back().CreatePrimitive(gridInfo), false, "Unable to create grid");
     mModels.back().SetMaterial(materialManager->AddDefaultMaterial(Direct3D::kBufferCount));
+    mModels.back().SetMaterial(mModels[0].GetMaterial());
     mModels.back().Translate(0.0f, -1.0f, 0.0f);
     mModels.back().Scale(5.f);
     mGrid = &mModels.back();

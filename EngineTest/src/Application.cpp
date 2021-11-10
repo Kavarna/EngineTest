@@ -78,8 +78,6 @@ bool Application::OnRender(ID3D12GraphicsCommandList *cmdList, FrameResources *f
                      return oldShouldRender;
                  });
 
-
-
     return true;
 }
 

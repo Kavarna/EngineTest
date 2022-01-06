@@ -2,6 +2,7 @@
 fmt/8.0.1
 assimp/5.0.1
 effolkronium-random/1.4.0
+stduuid/1.0
 
 [generators]
 cmake

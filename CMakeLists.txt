@@ -9,6 +9,7 @@ set(CURRENT_WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}")
 include(${CMAKE_BINARY_DIR}/conanbuildinfo.cmake)
 conan_basic_setup()
 
+include_directories("common")
 include_directories("D3D12Renderer/src/common")
 include_directories("D3D12Renderer/src/Graphics")
 include_directories("D3D12Renderer/src/Input")
@@ -26,3 +27,4 @@ endmacro()
 
 add_subdirectory("D3D12Renderer")
 add_subdirectory("EngineTest")
+add_subdirectory("common")

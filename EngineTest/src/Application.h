@@ -18,24 +18,17 @@ public:
     virtual bool OnRender(ID3D12GraphicsCommandList *cmdList, FrameResources *frameResources) override;
     virtual bool OnRenderGUI() override;
     virtual bool OnResize() override;
-    virtual std::unordered_map<void *, uint32_t> GetInstanceCount() override;
+    virtual std::unordered_map<uuids::uuid, uint32_t> GetInstanceCount() override;
+    virtual uint32_t GetPassCount() override;
 
     virtual uint32_t GetModelCount() override;
     virtual ID3D12PipelineState *GetBeginFramePipeline() override;
 
 private:
-    bool InitModels(ID3D12GraphicsCommandList *initializationCmdList, ID3D12CommandAllocator *cmdAllocator);
-
-private:
     void ReactToKeyPresses(float dt);
-    void UpdateCamera(FrameResources *frameResources);
-    void UpdateModels(FrameResources *frameResources);
-
-    void RenderModels(ID3D12GraphicsCommandList *cmdList, FrameResources *frameResources, std::function<bool(Model *)> callback);
 
 private:
     std::vector<Model> mModels;
-    Model *mGrid;
 
     SceneLight mSceneLight;
 

@@ -18,6 +18,7 @@ public:
     virtual bool OnRender(ID3D12GraphicsCommandList *cmdList, FrameResources *frameResources) override;
     virtual bool OnRenderGUI() override;
     virtual bool OnResize() override;
+    virtual void OnClose() override;
     virtual std::unordered_map<uuids::uuid, uint32_t> GetInstanceCount() override;
     virtual uint32_t GetPassCount() override;
 
@@ -26,6 +27,8 @@ public:
 
 private:
     void ReactToKeyPresses(float dt);
+
+    bool InitModels(ID3D12GraphicsCommandList* initializationCmdList, ID3D12CommandAllocator* cmdAllocator);
 
 private:
     std::vector<Model> mModels;

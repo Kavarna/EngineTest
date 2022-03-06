@@ -37,6 +37,7 @@ private:
 private:
     bool InitRaytracing();
     bool InitRaytracingPipelineObject();
+    bool InitRaytracingResources();
     bool InitShaderTable();
 
 private:
@@ -50,6 +51,9 @@ private:
     Camera mCamera;
 
     bool mMenuActive = true;
+
+    ComPtr<ID3D12Resource> mRaytracingResultResource;
+    ComPtr<ID3D12DescriptorHeap> mDescriptorHeap;
 
     ComPtr<ID3D12StateObject> mRtStateObject;
     UploadBuffer<unsigned char> mShaderTable;

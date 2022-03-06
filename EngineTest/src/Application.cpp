@@ -20,7 +20,7 @@ bool Application::OnInit(ID3D12GraphicsCommandList *initializationCmdList, ID3D1
 {
     mSceneLight.SetAmbientColor(0.02f, 0.02f, 0.02f, 1.0f);
     CHECK(InitModels(initializationCmdList, cmdAllocator), false, "Cannot init all models");
-    // CHECK(InitRaytracing(), false, "Cannot initialize raytracing");
+    CHECK(InitRaytracing(), false, "Cannot initialize raytracing");
     return true;
 }
 
@@ -31,24 +31,17 @@ bool Application::OnUpdate(FrameResources *frameResources, float dt)
     return true;
 }
 
-bool Application::OnRender(ID3D12GraphicsCommandList *cmdList, FrameResources *frameResources)
+bool Application::OnRender(ID3D12GraphicsCommandList *cmdList_, FrameResources *frameResources)
 {
-    // ID3D12GraphicsCommandList4* cmdList;
-    // CHECK_HR(cmdList_->QueryInterface(IID_PPV_ARGS(&cmdList)), false);
+    ID3D12GraphicsCommandList4* cmdList;
+    CHECK_HR(cmdList_->QueryInterface(IID_PPV_ARGS(&cmdList)), false);
 
     auto d3d = Direct3D::Get();
     auto pipelineManager = PipelineManager::Get();
-    FLOAT backgroundColor[4] = { 0.0f, 0.0f, 0.0f, 1.0f };
-
-    auto pipelineSignatureResult = pipelineManager->GetPipelineAndRootSignature(PipelineType::MaterialLight);
-    CHECK(pipelineSignatureResult.Valid(), false, "Unable to retrieve pipeline and root signature");
-    auto [pipeline, rootSignature] = pipelineSignatureResult.Get();
+    FLOAT backgroundColor[4] = { 1.0f, 0.0f, 0.0f, 1.0f };
 
     cmdList->RSSetViewports(1, &mViewport);
     cmdList->RSSetScissorRects(1, &mScissors);
-
-    cmdList->SetPipelineState(pipeline);
-    cmdList->SetGraphicsRootSignature(rootSignature);
 
     auto backbufferHandle = d3d->GetBackbufferHandle();
     auto dsvHandle = d3d->GetDSVHandle();
@@ -57,7 +50,47 @@ bool Application::OnRender(ID3D12GraphicsCommandList *cmdList, FrameResources *f
     cmdList->ClearDepthStencilView(dsvHandle, D3D12_CLEAR_FLAG_DEPTH | D3D12_CLEAR_FLAG_STENCIL, 1.0f, 0, 0, nullptr);
 
     cmdList->OMSetRenderTargets(1, &backbufferHandle, TRUE, &dsvHandle);
+
+    D3D12_DISPATCH_RAYS_DESC raytrace = {};
+    raytrace.Width = mClientWidth;
+    raytrace.Height = mClientHeight;
+    raytrace.Depth = 1;
     
+    raytrace.RayGenerationShaderRecord.StartAddress = mShaderTable.GetGPUVirtualAddress();
+    raytrace.RayGenerationShaderRecord.SizeInBytes = mShaderTableEntrySize;
+
+    size_t missOffset = mShaderTableEntrySize;
+    raytrace.MissShaderTable.StartAddress = mShaderTable.GetGPUVirtualAddress() + missOffset;
+    raytrace.MissShaderTable.SizeInBytes = mShaderTableEntrySize;
+    raytrace.MissShaderTable.StrideInBytes = mShaderTableEntrySize;
+
+    size_t hitOffset = 2 * mShaderTableEntrySize;
+    raytrace.HitGroupTable.StartAddress = mShaderTable.GetGPUVirtualAddress() + hitOffset;
+    raytrace.HitGroupTable.SizeInBytes = mShaderTableEntrySize;
+    raytrace.HitGroupTable.StrideInBytes = mShaderTableEntrySize;
+
+    auto emptyRootSignature = pipelineManager->GetRootSignature(RootSignatureType::Empty);
+    cmdList->SetComputeRootSignature(emptyRootSignature.Get());
+    cmdList->SetPipelineState1(mRtStateObject.Get());
+    
+    ID3D12DescriptorHeap* heaps[] = { mDescriptorHeap.Get() };
+    cmdList->SetDescriptorHeaps(ARRAYSIZE(heaps), heaps);
+
+    cmdList->DispatchRays(&raytrace);
+
+
+    auto currentBackbufferResource = d3d->GetCurrentBackbufferResource();
+    
+    d3d->Transition(cmdList, currentBackbufferResource.Get(), D3D12_RESOURCE_STATE_RENDER_TARGET, D3D12_RESOURCE_STATE_COPY_DEST);
+    d3d->Transition(cmdList, mRaytracingResultResource.Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS, D3D12_RESOURCE_STATE_COPY_SOURCE);
+    
+    cmdList->CopyResource(currentBackbufferResource.Get(), mRaytracingResultResource.Get());
+    
+    d3d->Transition(cmdList, mRaytracingResultResource.Get(), D3D12_RESOURCE_STATE_COPY_SOURCE, D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+    d3d->Transition(cmdList, currentBackbufferResource.Get(), D3D12_RESOURCE_STATE_COPY_DEST, D3D12_RESOURCE_STATE_RENDER_TARGET);
+
+    cmdList->Release();
+
     return true;
 }
 
@@ -205,7 +238,8 @@ bool Application::InitModels(ID3D12GraphicsCommandList* initializationCmdList, I
 
 bool Application::InitRaytracing()
 {
-    CHECK(InitRaytracingPipelineObject(), false, "Unable to initialze raytracing pipeline object")
+    CHECK(InitRaytracingPipelineObject(), false, "Unable to initialze raytracing pipeline object");
+    CHECK(InitRaytracingResources(), false, "Unable to initialize raytracing resources");
     CHECK(InitShaderTable(), false, "Unable to initialize raytracing shader table");
 
     return true;
@@ -219,6 +253,7 @@ bool Application::InitShaderTable()
     uint32_t shaderTableSize = mShaderTableEntrySize * 3;
 
     mShaderTable.Init(shaderTableSize);
+    mShaderTable.GetResource()->SetName(L"Shader table");
 
     ComPtr<ID3D12StateObjectProperties> props;
     mRtStateObject.As(&props);
@@ -227,8 +262,7 @@ bool Application::InitShaderTable()
 
     // Entry 0 - ray gen shader
     memcpy(mappedMemory, props->GetShaderIdentifier(kRaygenShader), D3D12_SHADER_IDENTIFIER_SIZE_IN_BYTES);
-
-
+    *(uint64_t*)(mappedMemory + D3D12_SHADER_IDENTIFIER_SIZE_IN_BYTES) = mDescriptorHeap->GetGPUDescriptorHandleForHeapStart().ptr;
     mappedMemory += mShaderTableEntrySize;
 
     // Entry 1 - miss shader
@@ -301,7 +335,7 @@ bool Application::InitRaytracingPipelineObject()
     ExportAssociation missClosestHitExportAssociation(ARRAYSIZE(emptyRootSignatureAssociated), emptyRootSignatureAssociated, subobjects[missClosestHitRootSignatureIndex]);
     subobjects[index++] = missClosestHitExportAssociation; // 5
 
-    ShaderConfig shaderConfig(2 * sizeof(float), sizeof(float));
+    ShaderConfig shaderConfig(2 * sizeof(float), 3 * sizeof(float));
     subobjects[index] = shaderConfig; // 6
     uint32_t shaderConfigIndex = index++;
 
@@ -312,7 +346,7 @@ bool Application::InitRaytracingPipelineObject()
     ExportAssociation shaderConfigExportAssociation(ARRAYSIZE(shaderConfigExports), shaderConfigExports, subobjects[shaderConfigIndex]);
     subobjects[index++] = shaderConfigExportAssociation; // 7
 
-    PipelineConfig pipelineConfig(3);
+    PipelineConfig pipelineConfig(1);
     subobjects[index++] = pipelineConfig; // 8
 
     D3D12_ROOT_SIGNATURE_DESC globalRootSignatureDesc = {};
@@ -324,6 +358,50 @@ bool Application::InitRaytracingPipelineObject()
     objectDesc.pSubobjects = subobjects.data();
     objectDesc.Type = D3D12_STATE_OBJECT_TYPE::D3D12_STATE_OBJECT_TYPE_RAYTRACING_PIPELINE;
     CHECK_HR(d3dDevice5->CreateStateObject(&objectDesc, IID_PPV_ARGS(&mRtStateObject)), false);
+
+    return true;
+}
+
+bool Application::InitRaytracingResources()
+{
+    auto d3d = Direct3D::Get();
+    auto device = d3d->GetD3D12Device();
+
+    CD3DX12_HEAP_PROPERTIES defaultHeap = CD3DX12_HEAP_PROPERTIES(D3D12_HEAP_TYPE::D3D12_HEAP_TYPE_DEFAULT);
+    CD3DX12_RESOURCE_DESC resourceDesc = CD3DX12_RESOURCE_DESC::Tex2D(
+        DXGI_FORMAT_R8G8B8A8_UNORM, mClientWidth, mClientHeight);
+    resourceDesc.MipLevels = 1;
+    resourceDesc.Layout = D3D12_TEXTURE_LAYOUT::D3D12_TEXTURE_LAYOUT_UNKNOWN;
+    resourceDesc.SampleDesc.Count = 1;
+    resourceDesc.Flags = D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS;
+
+    CHECK_HR(device->CreateCommittedResource(
+        &defaultHeap, D3D12_HEAP_FLAG_NONE,
+        &resourceDesc, D3D12_RESOURCE_STATES::D3D12_RESOURCE_STATE_UNORDERED_ACCESS,
+        nullptr,
+        IID_PPV_ARGS(&mRaytracingResultResource)
+    ), false);
+    mRaytracingResultResource->SetName(L"Raytracing texture");
+
+    auto heapResult = d3d->CreateDescriptorHeap(2, D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV, D3D12_DESCRIPTOR_HEAP_FLAG_SHADER_VISIBLE);
+    CHECK(heapResult.Valid(), false, "Unable to initialize raytracing descriptor heap");
+    mDescriptorHeap = heapResult.Get();
+    auto incrementSize = d3d->GetDescriptorIncrementSize<D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV>();
+    CD3DX12_CPU_DESCRIPTOR_HANDLE cpuHandle(mDescriptorHeap->GetCPUDescriptorHandleForHeapStart());
+
+    D3D12_UNORDERED_ACCESS_VIEW_DESC uavDesc = {};
+    uavDesc.Texture2D.MipSlice = 0;
+    uavDesc.Texture2D.PlaneSlice = 0;
+    uavDesc.ViewDimension = D3D12_UAV_DIMENSION_TEXTURE2D;
+    d3d->CreateUnorderedAccessView(mRaytracingResultResource.Get(), uavDesc, cpuHandle);
+    cpuHandle.Offset(1, incrementSize);
+
+    D3D12_SHADER_RESOURCE_VIEW_DESC srvDesc = {};
+    auto tlasBuffer = Model::GetTLASBuffer();
+    srvDesc.RaytracingAccelerationStructure.Location = tlasBuffer->GetGPUVirtualAddress();
+    srvDesc.ViewDimension = D3D12_SRV_DIMENSION::D3D12_SRV_DIMENSION_RAYTRACING_ACCELERATION_STRUCTURE;
+    srvDesc.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
+    d3d->CreateShaderResourceView(nullptr, srvDesc, cpuHandle);
 
     return true;
 }

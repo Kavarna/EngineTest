@@ -7,9 +7,13 @@
 
 class Application : public Engine
 {
+    static constexpr const wchar_t* kRaygenShader = L"rayGen";
+    static constexpr const wchar_t* kMissShader = L"miss";
+    static constexpr const wchar_t* kClosestHit = L"chs";
+    static constexpr const wchar_t* kHitGroupName = L"HitGroup";
 public:
     Application();
-    ~Application() = default;
+    ~Application();
 
 public:
     // Inherited via Engine
@@ -31,6 +35,11 @@ private:
     bool InitModels(ID3D12GraphicsCommandList* initializationCmdList, ID3D12CommandAllocator* cmdAllocator);
 
 private:
+    bool InitRaytracing();
+    bool InitRaytracingPipelineObject();
+    bool InitShaderTable();
+
+private:
     std::vector<Model> mModels;
 
     SceneLight mSceneLight;
@@ -42,4 +51,7 @@ private:
 
     bool mMenuActive = true;
 
+    ComPtr<ID3D12StateObject> mRtStateObject;
+    UploadBuffer<unsigned char> mShaderTable;
+    uint32_t mShaderTableEntrySize;
 };

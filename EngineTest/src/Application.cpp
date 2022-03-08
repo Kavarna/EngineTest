@@ -155,6 +155,21 @@ void Application::ReactToKeyPresses(float dt)
         PostQuitMessage(0);
     }
 
+    if (kb.H)
+    {
+        auto* colors = mClosestHitConstantBuffer.GetMappedMemory();
+        colors->Colors[0] = DirectX::XMFLOAT4(1.0f, 1.0f, 0.0f, 1.0f);
+        colors->Colors[1] = DirectX::XMFLOAT4(1.0f, 0.0f, 0.0f, 1.0f);
+        colors->Colors[2] = DirectX::XMFLOAT4(0.0f, 1.0f, 0.0f, 1.0f);
+    }
+    if (kb.I)
+    {
+        auto* colors = mClosestHitConstantBuffer.GetMappedMemory();
+        colors->Colors[0] = DirectX::XMFLOAT4(0.0f, 1.0f, 1.0f, 1.0f);
+        colors->Colors[1] = DirectX::XMFLOAT4(0.0f, 0.0f, 1.0f, 1.0f);
+        colors->Colors[2] = DirectX::XMFLOAT4(1.0f, 1.0f, 1.0f, 1.0f);
+    }
+
     if (!mMenuActive)
     {
         if (kb.W)
@@ -282,6 +297,9 @@ bool Application::InitShaderTable()
 
     // Entry 2 - hit program
     memcpy(mappedMemory, props->GetShaderIdentifier(kHitGroupName), D3D12_SHADER_IDENTIFIER_SIZE_IN_BYTES);
+    uint8_t* descriptorOffset = mappedMemory + D3D12_SHADER_IDENTIFIER_SIZE_IN_BYTES;
+    CHECK((uint64_t)descriptorOffset % 8 == 0, false, "Descriptors should be stored only on 8-aligned addresses");
+    *(uint64_t*)(descriptorOffset) = mClosestHitConstantBuffer.GetGPUVirtualAddress();
 
     return true;
 }
@@ -330,6 +348,24 @@ bool Application::InitRaytracingPipelineObject()
     ExportAssociation rayGenExportAssociation(ARRAYSIZE(rayGenShader), rayGenShader, subobjects[rayGenRootSignatureIndex]);
     subobjects[index++] = rayGenExportAssociation; // 3
 
+
+    CD3DX12_ROOT_PARAMETER chsParameters[1];
+    chsParameters[0].InitAsConstantBufferView(0, 0);
+    D3D12_ROOT_SIGNATURE_DESC chsSignatureDesc = {};
+    chsSignatureDesc.NumParameters = ARRAYSIZE(chsParameters);
+    chsSignatureDesc.pParameters = chsParameters;
+    chsSignatureDesc.Flags = D3D12_ROOT_SIGNATURE_FLAG_LOCAL_ROOT_SIGNATURE;
+    LocalRootSignature chsLocalRootSignature(chsSignatureDesc);
+    subobjects[index] = chsLocalRootSignature.stateSubobject; // 4
+    uint32_t chsLocalRootSignatureIndex = index++;
+
+    const wchar_t* closestHitConfigExport[] =
+    {
+        kClosestHit
+    };
+    ExportAssociation closestHitExportAssociation(ARRAYSIZE(closestHitConfigExport), closestHitConfigExport, subobjects[chsLocalRootSignatureIndex]);
+    subobjects[index++] = closestHitExportAssociation.stateSubobject;
+
     D3D12_ROOT_SIGNATURE_DESC emptyLocalRootSignatureDesc = {};
     emptyLocalRootSignatureDesc.Flags = D3D12_ROOT_SIGNATURE_FLAG_LOCAL_ROOT_SIGNATURE;
     emptyLocalRootSignatureDesc.NumParameters = 0;
@@ -340,7 +376,7 @@ bool Application::InitRaytracingPipelineObject()
 
     const wchar_t* emptyRootSignatureAssociated[] =
     {
-        kClosestHit, kMissShader
+        kMissShader
     };
     ExportAssociation missClosestHitExportAssociation(ARRAYSIZE(emptyRootSignatureAssociated), emptyRootSignatureAssociated, subobjects[missClosestHitRootSignatureIndex]);
     subobjects[index++] = missClosestHitExportAssociation; // 5
@@ -412,6 +448,12 @@ bool Application::InitRaytracingResources()
     srvDesc.ViewDimension = D3D12_SRV_DIMENSION::D3D12_SRV_DIMENSION_RAYTRACING_ACCELERATION_STRUCTURE;
     srvDesc.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
     d3d->CreateShaderResourceView(nullptr, srvDesc, cpuHandle);
+
+    CHECK(mClosestHitConstantBuffer.Init(1, true), false, "Unable to initialize constant buffer for chs");
+    auto* colors = mClosestHitConstantBuffer.GetMappedMemory();
+    colors->Colors[0] = DirectX::XMFLOAT4(1.0f, 1.0f, 0.0f, 1.0f);
+    colors->Colors[1] = DirectX::XMFLOAT4(1.0f, 0.0f, 0.0f, 1.0f);
+    colors->Colors[2] = DirectX::XMFLOAT4(0.0f, 1.0f, 0.0f, 1.0f);
 
     return true;
 }

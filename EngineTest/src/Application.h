@@ -58,4 +58,11 @@ private:
     ComPtr<ID3D12StateObject> mRtStateObject;
     UploadBuffer<unsigned char> mShaderTable;
     uint32_t mShaderTableEntrySize;
+
+    struct ClosestHitConstantBuffer
+    {
+        DirectX::XMFLOAT4 Colors[3];
+    };
+
+    UploadBuffer<ClosestHitConstantBuffer> mClosestHitConstantBuffer;
 };

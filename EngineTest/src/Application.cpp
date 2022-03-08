@@ -218,7 +218,17 @@ bool Application::InitModels(ID3D12GraphicsCommandList* initializationCmdList, I
     mModels.emplace_back(Direct3D::kBufferCount, 0);
     CHECK(mModels.back().Create("Resources\\Suzanne.obj"), false, "Unable to load Suzanne");
     // CHECK(mModels.back().Create(Model::ModelType::Triangle), false, "Unable to load triangle");
+    mModels.back().Scale(0.5f, 0.5f, 0.5f);
     mModels.back().Translate(2.0f, 0.0f, 0.0f);
+    
+    uint32_t firstIntance = mModels.back().AddInstance(InstanceInfo()).Get();
+    uint32_t secondInstance = mModels.back().AddInstance(InstanceInfo()).Get();
+    
+    mModels.back().Scale(0.5f, 0.5f, 0.5f, firstIntance);
+    mModels.back().Translate(0.0f, 0.0f, 0.0f, firstIntance);
+
+    mModels.back().Scale(0.5f, 0.5f, 0.5f, secondInstance);
+    mModels.back().Translate(-2.0f, 0.0f, 0.0f, secondInstance);
 
     ComPtr<ID3D12Resource> intermediaryResources1[2];
     CHECK(Model::InitBuffers(cmdList, intermediaryResources1), false, "Unable to initialize buffers for models");

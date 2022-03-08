@@ -65,8 +65,9 @@ bool Application::OnRender(ID3D12GraphicsCommandList *cmdList_, FrameResources *
     raytrace.MissShaderTable.StrideInBytes = mShaderTableEntrySize;
 
     size_t hitOffset = 2 * mShaderTableEntrySize;
+    auto instanceCount = Model::GetTotalInstanceCount();
     raytrace.HitGroupTable.StartAddress = mShaderTable.GetGPUVirtualAddress() + hitOffset;
-    raytrace.HitGroupTable.SizeInBytes = mShaderTableEntrySize;
+    raytrace.HitGroupTable.SizeInBytes = mShaderTableEntrySize * instanceCount;
     raytrace.HitGroupTable.StrideInBytes = mShaderTableEntrySize;
 
     auto emptyRootSignature = pipelineManager->GetRootSignature(RootSignatureType::Empty);
@@ -157,17 +158,20 @@ void Application::ReactToKeyPresses(float dt)
 
     if (kb.H)
     {
-        auto* colors = mClosestHitConstantBuffer.GetMappedMemory();
-        colors->Colors[0] = DirectX::XMFLOAT4(1.0f, 1.0f, 0.0f, 1.0f);
-        colors->Colors[1] = DirectX::XMFLOAT4(1.0f, 0.0f, 0.0f, 1.0f);
-        colors->Colors[2] = DirectX::XMFLOAT4(0.0f, 1.0f, 0.0f, 1.0f);
-    }
-    if (kb.I)
-    {
-        auto* colors = mClosestHitConstantBuffer.GetMappedMemory();
-        colors->Colors[0] = DirectX::XMFLOAT4(0.0f, 1.0f, 1.0f, 1.0f);
-        colors->Colors[1] = DirectX::XMFLOAT4(0.0f, 0.0f, 1.0f, 1.0f);
-        colors->Colors[2] = DirectX::XMFLOAT4(1.0f, 1.0f, 1.0f, 1.0f);
+        auto instanceCount = Model::GetTotalInstanceCount();
+        DirectX::XMFLOAT4 allColors[] = {
+            DirectX::XMFLOAT4(1.0f, 1.0f, 0.0f, 1.0f),
+            DirectX::XMFLOAT4(1.0f, 0.0f, 0.0f, 1.0f),
+            DirectX::XMFLOAT4(0.0f, 1.0f, 0.0f, 1.0f),
+            DirectX::XMFLOAT4(1.0f, 1.0f, 1.0f, 1.0f),
+            DirectX::XMFLOAT4(1.0f, 0.0f, 1.0f, 1.0f),
+            DirectX::XMFLOAT4(0.0f, 1.0f, 1.0f, 1.0f),
+        };
+        for (uint32_t i = 0; i < instanceCount; ++i)
+        {
+            auto* colors = mClosestHitConstantBuffer.GetMappedMemory(i);
+            colors->Colors = *Random::get(allColors);
+        }
     }
 
     if (!mMenuActive)
@@ -275,7 +279,8 @@ bool Application::InitShaderTable()
     mShaderTableEntrySize = D3D12_SHADER_IDENTIFIER_SIZE_IN_BYTES;
     mShaderTableEntrySize += 8;
     mShaderTableEntrySize = Math::AlignUp(mShaderTableEntrySize, D3D12_RAYTRACING_SHADER_RECORD_BYTE_ALIGNMENT);
-    uint32_t shaderTableSize = mShaderTableEntrySize * 3;
+    auto instanceCount = Model::GetTotalInstanceCount();
+    uint32_t shaderTableSize = mShaderTableEntrySize * 2 + mShaderTableEntrySize * instanceCount;
 
     mShaderTable.Init(shaderTableSize);
     mShaderTable.GetResource()->SetName(L"Shader table");
@@ -296,11 +301,14 @@ bool Application::InitShaderTable()
     mappedMemory += mShaderTableEntrySize;
 
     // Entry 2 - hit program
-    memcpy(mappedMemory, props->GetShaderIdentifier(kHitGroupName), D3D12_SHADER_IDENTIFIER_SIZE_IN_BYTES);
-    uint8_t* descriptorOffset = mappedMemory + D3D12_SHADER_IDENTIFIER_SIZE_IN_BYTES;
-    CHECK((uint64_t)descriptorOffset % 8 == 0, false, "Descriptors should be stored only on 8-aligned addresses");
-    *(uint64_t*)(descriptorOffset) = mClosestHitConstantBuffer.GetGPUVirtualAddress();
-
+    for (uint32_t i = 0; i < instanceCount; ++i)
+    {
+        memcpy(mappedMemory, props->GetShaderIdentifier(kHitGroupName), D3D12_SHADER_IDENTIFIER_SIZE_IN_BYTES);
+        uint8_t* descriptorOffset = mappedMemory + D3D12_SHADER_IDENTIFIER_SIZE_IN_BYTES;
+        CHECK((uint64_t)descriptorOffset % 8 == 0, false, "Descriptors should be stored only on 8-aligned addresses");
+        *(uint64_t*)(descriptorOffset) = mClosestHitConstantBuffer.GetGPUVirtualAddress() + mClosestHitConstantBuffer.GetElementSize() * i;
+        mappedMemory += mShaderTableEntrySize;
+    }
     return true;
 }
 
@@ -449,11 +457,18 @@ bool Application::InitRaytracingResources()
     srvDesc.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
     d3d->CreateShaderResourceView(nullptr, srvDesc, cpuHandle);
 
-    CHECK(mClosestHitConstantBuffer.Init(1, true), false, "Unable to initialize constant buffer for chs");
-    auto* colors = mClosestHitConstantBuffer.GetMappedMemory();
-    colors->Colors[0] = DirectX::XMFLOAT4(1.0f, 1.0f, 0.0f, 1.0f);
-    colors->Colors[1] = DirectX::XMFLOAT4(1.0f, 0.0f, 0.0f, 1.0f);
-    colors->Colors[2] = DirectX::XMFLOAT4(0.0f, 1.0f, 0.0f, 1.0f);
+    auto instanceCount = Model::GetTotalInstanceCount();
+    CHECK(mClosestHitConstantBuffer.Init(instanceCount, true), false, "Unable to initialize constant buffer for chs");
+    DirectX::XMFLOAT4 allColors[] = {
+        DirectX::XMFLOAT4(1.0f, 1.0f, 0.0f, 1.0f),
+        DirectX::XMFLOAT4(1.0f, 1.0f, 1.0f, 1.0f),
+        DirectX::XMFLOAT4(0.0f, 1.0f, 0.0f, 1.0f),
+    };
+    for (uint32_t i = 0; i < instanceCount; ++i)
+    {
+        auto* colors = mClosestHitConstantBuffer.GetMappedMemory(i);
+        colors->Colors = *Random::get(allColors);
+    }
 
     return true;
 }

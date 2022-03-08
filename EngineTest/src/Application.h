@@ -61,7 +61,7 @@ private:
 
     struct ClosestHitConstantBuffer
     {
-        DirectX::XMFLOAT4 Colors[3];
+        DirectX::XMFLOAT4 Colors;
     };
 
     UploadBuffer<ClosestHitConstantBuffer> mClosestHitConstantBuffer;

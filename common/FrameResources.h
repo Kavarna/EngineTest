@@ -59,12 +59,15 @@ struct InstanceInfo
     DirectX::XMMATRIX WorldMatrix;
     DirectX::XMFLOAT4 Color;
 
-    float AnimationTime;
+    enum {
+        RAYTRACING_SHADER_0,
+        RAYTRACING_SHADER_1
+    };
+    unsigned int flags = 0;
     DirectX::XMFLOAT3 pad;
     InstanceInfo() {
         WorldMatrix = DirectX::XMMatrixIdentity();
         Color = { 1.0f, 1.0f, 1.0f, 1.0f };
-        AnimationTime = 0.0f;
     }
 };
 

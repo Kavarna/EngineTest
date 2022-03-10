@@ -10,7 +10,9 @@ class Application : public Engine
     static constexpr const wchar_t* kRaygenShader = L"rayGen";
     static constexpr const wchar_t* kMissShader = L"miss";
     static constexpr const wchar_t* kClosestHit = L"chs";
+    static constexpr const wchar_t* kClosestHit1 = L"chs1";
     static constexpr const wchar_t* kHitGroupName = L"HitGroup";
+    static constexpr const wchar_t* kHitGroupName1 = L"HitGroup1";
 public:
     Application();
     ~Application();

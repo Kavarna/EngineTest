@@ -61,13 +61,13 @@ bool Application::OnRender(ID3D12GraphicsCommandList *cmdList_, FrameResources *
 
     size_t missOffset = mShaderTableEntrySize;
     raytrace.MissShaderTable.StartAddress = mShaderTable.GetGPUVirtualAddress() + missOffset;
-    raytrace.MissShaderTable.SizeInBytes = mShaderTableEntrySize;
+    raytrace.MissShaderTable.SizeInBytes = mShaderTableEntrySize * mNumMissShaders;
     raytrace.MissShaderTable.StrideInBytes = mShaderTableEntrySize;
 
-    size_t hitOffset = 2 * mShaderTableEntrySize;
+    size_t hitOffset = mNumMissShaders * mShaderTableEntrySize + mShaderTableEntrySize;
     auto instanceCount = Model::GetTotalInstanceCount(mModels);
     raytrace.HitGroupTable.StartAddress = mShaderTable.GetGPUVirtualAddress() + hitOffset;
-    raytrace.HitGroupTable.SizeInBytes = mShaderTableEntrySize * instanceCount;
+    raytrace.HitGroupTable.SizeInBytes = mShaderTableEntrySize * instanceCount * mNumMaxHitGroups;
     raytrace.HitGroupTable.StrideInBytes = mShaderTableEntrySize;
 
     auto emptyRootSignature = pipelineManager->GetRootSignature(RootSignatureType::Empty);
@@ -285,7 +285,7 @@ bool Application::InitShaderTable()
     mShaderTableEntrySize += 8;
     mShaderTableEntrySize = Math::AlignUp(mShaderTableEntrySize, D3D12_RAYTRACING_SHADER_RECORD_BYTE_ALIGNMENT);
     auto instanceCount = Model::GetTotalInstanceCount(mModels);
-    uint32_t shaderTableSize = mShaderTableEntrySize * 2 + mShaderTableEntrySize * instanceCount;
+    uint32_t shaderTableSize = mShaderTableEntrySize + mShaderTableEntrySize * mNumMissShaders + mShaderTableEntrySize * instanceCount * mNumMaxHitGroups;
 
     mShaderTable.Init(shaderTableSize);
     mShaderTable.GetResource()->SetName(L"Shader table");
@@ -302,10 +302,13 @@ bool Application::InitShaderTable()
 
     // Entry 1 - miss shader
     memcpy(mappedMemory, props->GetShaderIdentifier(kMissShader), D3D12_SHADER_IDENTIFIER_SIZE_IN_BYTES);
-
     mappedMemory += mShaderTableEntrySize;
 
-    // Entry 2 - hit program
+    // Entry 2 - shadow miss shader
+    memcpy(mappedMemory, props->GetShaderIdentifier(kShadowMiss), D3D12_SHADER_IDENTIFIER_SIZE_IN_BYTES);
+    mappedMemory += mShaderTableEntrySize;
+
+    // Entry 3 - hit program
     // for (uint32_t i = 0; i < instanceCount; ++i)
     for (const auto& model : mModels)
     {
@@ -314,19 +317,26 @@ bool Application::InitShaderTable()
             const auto& currentInstance = model.GetInstanceInfo(i);
             // Check flags and assign shaders
 
-            auto shaderIdentifier = props->GetShaderIdentifier(kHitGroupName);
-            auto shaderIdentifier1 = props->GetShaderIdentifier(kHitGroupName1);
             if (currentInstance.flags == InstanceInfo::RAYTRACING_SHADER_1)
             {
-                memcpy(mappedMemory, shaderIdentifier1, D3D12_SHADER_IDENTIFIER_SIZE_IN_BYTES);
+                uint32_t descriptorSize = Direct3D::Get()->GetDescriptorIncrementSize<D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV>();
+                memcpy(mappedMemory, props->GetShaderIdentifier(kHitGroupName1), D3D12_SHADER_IDENTIFIER_SIZE_IN_BYTES);
+                *(uint64_t*)(mappedMemory + D3D12_SHADER_IDENTIFIER_SIZE_IN_BYTES) = mDescriptorHeap->GetGPUDescriptorHandleForHeapStart().ptr + descriptorSize;
+                
+                mappedMemory += mShaderTableEntrySize;
+                memcpy(mappedMemory, props->GetShaderIdentifier(kShadowHitGroup), D3D12_SHADER_IDENTIFIER_SIZE_IN_BYTES);
+
             }
             else
             {
-                memcpy(mappedMemory, shaderIdentifier, D3D12_SHADER_IDENTIFIER_SIZE_IN_BYTES);
+                memcpy(mappedMemory, props->GetShaderIdentifier(kHitGroupName), D3D12_SHADER_IDENTIFIER_SIZE_IN_BYTES);
+                uint8_t* descriptorOffset = mappedMemory + D3D12_SHADER_IDENTIFIER_SIZE_IN_BYTES;
+                CHECK((uint64_t)descriptorOffset % 8 == 0, false, "Descriptors should be stored only on 8-aligned addresses");
+                *(uint64_t*)(descriptorOffset) = mClosestHitConstantBuffer.GetGPUVirtualAddress() + mClosestHitConstantBuffer.GetElementSize() * i;
+
+                mappedMemory += mShaderTableEntrySize;
+                memcpy(mappedMemory, props->GetShaderIdentifier(kShadowHitGroup), D3D12_SHADER_IDENTIFIER_SIZE_IN_BYTES);
             }
-            uint8_t* descriptorOffset = mappedMemory + D3D12_SHADER_IDENTIFIER_SIZE_IN_BYTES;
-            CHECK((uint64_t)descriptorOffset % 8 == 0, false, "Descriptors should be stored only on 8-aligned addresses");
-            *(uint64_t*)(descriptorOffset) = mClosestHitConstantBuffer.GetGPUVirtualAddress() + mClosestHitConstantBuffer.GetElementSize() * i;
             mappedMemory += mShaderTableEntrySize;
         }
     }
@@ -343,10 +353,10 @@ bool Application::InitRaytracingPipelineObject()
     auto shadersBlob = Utils::CompileLibrary(L"Shaders\\Basic.rt.hlsl", L"lib_6_3");
     CHECK(shadersBlob, false, "Unable to compile Basic.rt.hlsl");
 
-    std::array<D3D12_STATE_SUBOBJECT, 14> subobjects = {};
+    std::array<D3D12_STATE_SUBOBJECT, 16> subobjects = {};
     uint32_t index = 0;
 
-    const wchar_t* entrypoints[] = { kRaygenShader, kMissShader, kClosestHit, kClosestHit1 };
+    const wchar_t* entrypoints[] = { kRaygenShader, kMissShader, kClosestHit, kClosestHit1, kShadowClosestHit, kShadowMiss };
     DxilLibrary library(shadersBlob, entrypoints, ARRAYSIZE(entrypoints));
     subobjects[index++] = library; // 0
 
@@ -355,6 +365,9 @@ bool Application::InitRaytracingPipelineObject()
 
     HitGroup hitGroup1(nullptr, kClosestHit1, kHitGroupName1);
     subobjects[index++] = hitGroup1; // 2
+
+    HitGroup shadowHitGroup(nullptr, kShadowClosestHit, kShadowHitGroup);
+    subobjects[index++] = shadowHitGroup; // 3
 
     CD3DX12_DESCRIPTOR_RANGE rayGenRanges[2];
     rayGenRanges[0].Init(D3D12_DESCRIPTOR_RANGE_TYPE_UAV, 1, 0, 0, 0);
@@ -371,15 +384,34 @@ bool Application::InitRaytracingPipelineObject()
     LocalRootSignature rayGenLocalRootSignature(rayGenLocalRootSignatureDesc);
     subobjects[index] = rayGenLocalRootSignature;
 
-    uint32_t rayGenRootSignatureIndex = index++; // 3
+    uint32_t rayGenRootSignatureIndex = index++; // 4
 
     const wchar_t* rayGenShader[] =
     {
         kRaygenShader
     };
     ExportAssociation rayGenExportAssociation(ARRAYSIZE(rayGenShader), rayGenShader, subobjects[rayGenRootSignatureIndex]);
-    subobjects[index++] = rayGenExportAssociation; // 4
+    subobjects[index++] = rayGenExportAssociation; // 5
 
+
+    CD3DX12_DESCRIPTOR_RANGE chs1Ranges[1];
+    chs1Ranges[0].Init(D3D12_DESCRIPTOR_RANGE_TYPE_SRV, 1, 0);
+    CD3DX12_ROOT_PARAMETER chs1Parameters[1];
+    chs1Parameters[0].InitAsDescriptorTable(ARRAYSIZE(chs1Ranges), chs1Ranges);
+    D3D12_ROOT_SIGNATURE_DESC chs1RootSignatureDesc = {};
+    chs1RootSignatureDesc.Flags = D3D12_ROOT_SIGNATURE_FLAG_LOCAL_ROOT_SIGNATURE;
+    chs1RootSignatureDesc.NumParameters = ARRAYSIZE(chs1Parameters);
+    chs1RootSignatureDesc.pParameters = chs1Parameters;
+    
+    LocalRootSignature chs1LocalRootSignature(chs1RootSignatureDesc);
+    subobjects[index++] = chs1LocalRootSignature.stateSubobject; // 6
+
+    const wchar_t* closestHit1ConfigExport[] =
+    {
+        kClosestHit1,
+    };
+    ExportAssociation closestHit1ExportAssociation(ARRAYSIZE(closestHit1ConfigExport), closestHit1ConfigExport, subobjects[index - 1]);
+    subobjects[index++] = closestHit1ExportAssociation.stateSubobject; // 7
 
     CD3DX12_ROOT_PARAMETER chsParameters[1];
     chsParameters[0].InitAsConstantBufferView(0, 0);
@@ -388,48 +420,48 @@ bool Application::InitRaytracingPipelineObject()
     chsSignatureDesc.pParameters = chsParameters;
     chsSignatureDesc.Flags = D3D12_ROOT_SIGNATURE_FLAG_LOCAL_ROOT_SIGNATURE;
     LocalRootSignature chsLocalRootSignature(chsSignatureDesc);
-    subobjects[index] = chsLocalRootSignature.stateSubobject; // 5
+    subobjects[index] = chsLocalRootSignature.stateSubobject; // 8
     uint32_t chsLocalRootSignatureIndex = index++;
 
     const wchar_t* closestHitConfigExport[] =
     {
-        kClosestHit, kClosestHit1
+        kClosestHit
     };
     ExportAssociation closestHitExportAssociation(ARRAYSIZE(closestHitConfigExport), closestHitConfigExport, subobjects[chsLocalRootSignatureIndex]);
-    subobjects[index++] = closestHitExportAssociation.stateSubobject; // 6
+    subobjects[index++] = closestHitExportAssociation.stateSubobject; // 9
 
     D3D12_ROOT_SIGNATURE_DESC emptyLocalRootSignatureDesc = {};
     emptyLocalRootSignatureDesc.Flags = D3D12_ROOT_SIGNATURE_FLAG_LOCAL_ROOT_SIGNATURE;
     emptyLocalRootSignatureDesc.NumParameters = 0;
     emptyLocalRootSignatureDesc.pParameters = nullptr;
     LocalRootSignature missClosestHitRootSignature(emptyLocalRootSignatureDesc);
-    subobjects[index] = missClosestHitRootSignature; // 7
+    subobjects[index] = missClosestHitRootSignature; // 10
     uint32_t missClosestHitRootSignatureIndex = index++;
 
     const wchar_t* emptyRootSignatureAssociated[] =
     {
-        kMissShader
+        kMissShader, kShadowClosestHit, kShadowMiss
     };
     ExportAssociation missClosestHitExportAssociation(ARRAYSIZE(emptyRootSignatureAssociated), emptyRootSignatureAssociated, subobjects[missClosestHitRootSignatureIndex]);
-    subobjects[index++] = missClosestHitExportAssociation; // 8
+    subobjects[index++] = missClosestHitExportAssociation; // 11
 
     ShaderConfig shaderConfig(2 * sizeof(float), 3 * sizeof(float));
-    subobjects[index] = shaderConfig; // 9
+    subobjects[index] = shaderConfig; // 12
     uint32_t shaderConfigIndex = index++;
 
     const wchar_t* shaderConfigExports[] =
     {
-        kClosestHit, kClosestHit1, kMissShader, kRaygenShader
+        kClosestHit, kClosestHit1, kMissShader, kRaygenShader, kShadowClosestHit, kShadowMiss
     };
     ExportAssociation shaderConfigExportAssociation(ARRAYSIZE(shaderConfigExports), shaderConfigExports, subobjects[shaderConfigIndex]);
-    subobjects[index++] = shaderConfigExportAssociation; // 10
+    subobjects[index++] = shaderConfigExportAssociation; // 13
 
-    PipelineConfig pipelineConfig(1);
-    subobjects[index++] = pipelineConfig; // 11
+    PipelineConfig pipelineConfig(2);
+    subobjects[index++] = pipelineConfig; // 14
 
     D3D12_ROOT_SIGNATURE_DESC globalRootSignatureDesc = {};
     GlobalRootSignature globalRootSignature(globalRootSignatureDesc);
-    subobjects[index++] = globalRootSignature; // 12
+    subobjects[index++] = globalRootSignature; // 15
 
     D3D12_STATE_OBJECT_DESC objectDesc = {};
     objectDesc.NumSubobjects = index;
@@ -483,15 +515,17 @@ bool Application::InitRaytracingResources()
 
     auto instanceCount = Model::GetTotalInstanceCount(mModels);
     CHECK(mClosestHitConstantBuffer.Init(instanceCount, true), false, "Unable to initialize constant buffer for chs");
-    DirectX::XMFLOAT4 allColors[] = {
-        DirectX::XMFLOAT4(1.0f, 1.0f, 0.0f, 1.0f),
-        DirectX::XMFLOAT4(1.0f, 1.0f, 1.0f, 1.0f),
+    DirectX::XMFLOAT4 allColors[] =
+    {
+        DirectX::XMFLOAT4(0.0f, 0.0f, 1.0f, 1.0f),
         DirectX::XMFLOAT4(0.0f, 1.0f, 0.0f, 1.0f),
+        DirectX::XMFLOAT4(1.0f, 0.0f, 0.0f, 1.0f),
+        DirectX::XMFLOAT4(0.0f, 0.0f, 0.0f, 1.0f),
     };
     for (uint32_t i = 0; i < instanceCount; ++i)
     {
         auto* colors = mClosestHitConstantBuffer.GetMappedMemory(i);
-        colors->Colors = *Random::get(allColors);
+        colors->Colors = allColors[i];
     }
 
     return true;

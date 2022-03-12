@@ -13,6 +13,10 @@ class Application : public Engine
     static constexpr const wchar_t* kClosestHit1 = L"chs1";
     static constexpr const wchar_t* kHitGroupName = L"HitGroup";
     static constexpr const wchar_t* kHitGroupName1 = L"HitGroup1";
+
+    static constexpr const wchar_t* kShadowHitGroup = L"ShadowHitGroup";
+    static constexpr const wchar_t* kShadowMiss = L"shadowMiss";
+    static constexpr const wchar_t* kShadowClosestHit = L"shadowClosestHit";
 public:
     Application();
     ~Application();
@@ -60,6 +64,9 @@ private:
     ComPtr<ID3D12StateObject> mRtStateObject;
     UploadBuffer<unsigned char> mShaderTable;
     uint32_t mShaderTableEntrySize;
+
+    uint32_t mNumMissShaders = 2;
+    uint32_t mNumMaxHitGroups = 2;
 
     struct ClosestHitConstantBuffer
     {

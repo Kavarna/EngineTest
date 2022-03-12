@@ -28,6 +28,17 @@ bool Application::OnUpdate(FrameResources *frameResources, float dt)
 {
     ReactToKeyPresses(dt);
     mSceneLight.UpdateLightsBuffer(frameResources->LightsBuffer);
+
+    static float theta = 0.0f;
+    for (int32_t i = 0; i < (int32_t)mModels[0].GetInstanceCount(); ++i)
+    {
+        mModels[0].Identity(i);
+        mModels[0].RotateY((i + 1) * theta, i);
+        mModels[0].Scale(0.5f, 0.5f, 0.5f, i);
+        mModels[0].Translate((float)(i - 1) * 2.0f, 0.0f, 0.0f, i);
+    }
+    theta += Random::get(0.5f, 0.75f) * dt;
+
     return true;
 }
 
@@ -35,6 +46,8 @@ bool Application::OnRender(ID3D12GraphicsCommandList *cmdList_, FrameResources *
 {
     ID3D12GraphicsCommandList4* cmdList;
     CHECK_HR(cmdList_->QueryInterface(IID_PPV_ARGS(&cmdList)), false);
+
+    Model::BuildTopLevelAccelerationStructure(cmdList, mModels, mNumMaxHitGroups, true);
 
     auto d3d = Direct3D::Get();
     auto pipelineManager = PipelineManager::Get();
@@ -232,7 +245,7 @@ bool Application::InitModels(ID3D12GraphicsCommandList* initializationCmdList, I
     CHECK(mModels.back().Create("Resources\\Suzanne.obj"), false, "Unable to load Suzanne");
     // CHECK(mModels.back().Create(Model::ModelType::Triangle), false, "Unable to load triangle");
     mModels.back().Scale(0.5f, 0.5f, 0.5f);
-    mModels.back().Translate(2.0f, 0.0f, 0.0f);
+    mModels.back().Translate(-2.0f, 0.0f, 0.0f);
     
     uint32_t firstIntance = mModels.back().AddInstance(InstanceInfo()).Get();
     uint32_t secondInstance = mModels.back().AddInstance(InstanceInfo()).Get();
@@ -241,7 +254,7 @@ bool Application::InitModels(ID3D12GraphicsCommandList* initializationCmdList, I
     mModels.back().Translate(0.0f, 0.0f, 0.0f, firstIntance);
 
     mModels.back().Scale(0.5f, 0.5f, 0.5f, secondInstance);
-    mModels.back().Translate(-2.0f, 0.0f, 0.0f, secondInstance);
+    mModels.back().Translate(+2.0f, 0.0f, 0.0f, secondInstance);
 
     mModels.emplace_back(Direct3D::kBufferCount, 1);
     mModels.back().Create(Model::ModelType::Square);
@@ -258,7 +271,7 @@ bool Application::InitModels(ID3D12GraphicsCommandList* initializationCmdList, I
     {
         model.BuildBottomLevelAccelerationStructure(cmdList);
     }
-    Model::BuildTopLevelAccelerationStructure(cmdList, mModels);
+    Model::BuildTopLevelAccelerationStructure(cmdList, mModels, mNumMaxHitGroups);
     
     mCamera.Create({ 0.0f, 0.0f, -3.0f }, (float)mClientWidth / mClientHeight);
 

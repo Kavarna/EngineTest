@@ -37,8 +37,26 @@ bool Application::OnUpdate(FrameResources *frameResources, float dt)
         mModels[0].Scale(0.5f, 0.5f, 0.5f, i);
         mModels[0].Translate((float)(i - 1) * 2.0f, 0.0f, 0.0f, i);
     }
-    theta += Random::get(0.5f, 0.75f) * dt;
+    auto instanceCount = Model::GetTotalInstanceCount(mModels);
+    for (uint32_t i = 0; i < instanceCount; ++i)
+    {
+        const auto& instanceInfo = Model::GetInstanceAtIndex(mModels, i);
+        ClosestHitConstantBuffer* cbData = mClosestHitConstantBuffer.GetMappedMemory(i);
+        cbData->World = DirectX::XMMatrixTranspose(instanceInfo.WorldMatrix);
+    }
 
+    auto kb = mKeyboard->GetState();
+    if (kb.H)
+    {
+        if (kb.LeftShift)
+        {
+            theta -= dt;
+        }
+        else
+        {
+            theta += dt;
+        }
+    }
     return true;
 }
 
@@ -169,18 +187,6 @@ void Application::ReactToKeyPresses(float dt)
         PostQuitMessage(0);
     }
 
-    if (kb.H)
-    {
-        auto instanceCount = Model::GetTotalInstanceCount(mModels);
-        for (uint32_t i = 0; i < instanceCount; ++i)
-        {
-            auto* colors = mClosestHitConstantBuffer.GetMappedMemory(i);
-            colors->Colors.x = Random::get(0.0f, 1.0f);
-            colors->Colors.y = Random::get(0.0f, 1.0f);
-            colors->Colors.z = Random::get(0.0f, 1.0f);
-        }
-    }
-
     if (!mMenuActive)
     {
         if (kb.W)
@@ -295,7 +301,8 @@ bool Application::InitRaytracing()
 bool Application::InitShaderTable()
 {
     mShaderTableEntrySize = D3D12_SHADER_IDENTIFIER_SIZE_IN_BYTES;
-    mShaderTableEntrySize += 8;
+    mShaderTableEntrySize += 8; // A descriptor table / constant buffer view
+    mShaderTableEntrySize += 8; // The other descriptor table / constant buffer view
     mShaderTableEntrySize = Math::AlignUp(mShaderTableEntrySize, D3D12_RAYTRACING_SHADER_RECORD_BYTE_ALIGNMENT);
     auto instanceCount = Model::GetTotalInstanceCount(mModels);
     uint32_t shaderTableSize = mShaderTableEntrySize + mShaderTableEntrySize * mNumMissShaders + mShaderTableEntrySize * instanceCount * mNumMaxHitGroups;
@@ -334,16 +341,27 @@ bool Application::InitShaderTable()
             {
                 uint32_t descriptorSize = Direct3D::Get()->GetDescriptorIncrementSize<D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV>();
                 memcpy(mappedMemory, props->GetShaderIdentifier(kHitGroupName1), D3D12_SHADER_IDENTIFIER_SIZE_IN_BYTES);
-                *(uint64_t*)(mappedMemory + D3D12_SHADER_IDENTIFIER_SIZE_IN_BYTES) = mDescriptorHeap->GetGPUDescriptorHandleForHeapStart().ptr + descriptorSize;
+                *(uint64_t*)(mappedMemory + D3D12_SHADER_IDENTIFIER_SIZE_IN_BYTES) = 
+                    mDescriptorHeap->GetGPUDescriptorHandleForHeapStart().ptr + descriptorSize;
                 
+                uint8_t* descriptorOffset = mappedMemory + D3D12_SHADER_IDENTIFIER_SIZE_IN_BYTES + sizeof(uint64_t); // sizeof GPU Descriptor handle
+                
+                CHECK((uint64_t)descriptorOffset % 8 == 0, false, "Descriptors should be stored only on 8-aligned addresses");
+                *(uint64_t*)(descriptorOffset) = mClosestHitConstantBuffer.GetGPUVirtualAddress() + mClosestHitConstantBuffer.GetElementSize() * i;
+
                 mappedMemory += mShaderTableEntrySize;
                 memcpy(mappedMemory, props->GetShaderIdentifier(kShadowHitGroup), D3D12_SHADER_IDENTIFIER_SIZE_IN_BYTES);
 
             }
             else
             {
+                uint32_t descriptorSize = Direct3D::Get()->GetDescriptorIncrementSize<D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV>();
                 memcpy(mappedMemory, props->GetShaderIdentifier(kHitGroupName), D3D12_SHADER_IDENTIFIER_SIZE_IN_BYTES);
-                uint8_t* descriptorOffset = mappedMemory + D3D12_SHADER_IDENTIFIER_SIZE_IN_BYTES;
+                *(uint64_t*)(mappedMemory + D3D12_SHADER_IDENTIFIER_SIZE_IN_BYTES) = 
+                    mDescriptorHeap->GetGPUDescriptorHandleForHeapStart().ptr + descriptorSize + descriptorSize;
+                
+                uint8_t* descriptorOffset = mappedMemory + D3D12_SHADER_IDENTIFIER_SIZE_IN_BYTES + sizeof(uint64_t); // sizeof GPU Descriptor handle
+
                 CHECK((uint64_t)descriptorOffset % 8 == 0, false, "Descriptors should be stored only on 8-aligned addresses");
                 *(uint64_t*)(descriptorOffset) = mClosestHitConstantBuffer.GetGPUVirtualAddress() + mClosestHitConstantBuffer.GetElementSize() * i;
 
@@ -408,9 +426,12 @@ bool Application::InitRaytracingPipelineObject()
 
 
     CD3DX12_DESCRIPTOR_RANGE chs1Ranges[1];
-    chs1Ranges[0].Init(D3D12_DESCRIPTOR_RANGE_TYPE_SRV, 1, 0);
-    CD3DX12_ROOT_PARAMETER chs1Parameters[1];
+    chs1Ranges[0].Init(D3D12_DESCRIPTOR_RANGE_TYPE_SRV, 3, 0);  // 1 - Acceleration Structure
+                                                                // 2 - vertex buffer
+                                                                // 3 - index buffer
+    CD3DX12_ROOT_PARAMETER chs1Parameters[2];
     chs1Parameters[0].InitAsDescriptorTable(ARRAYSIZE(chs1Ranges), chs1Ranges);
+    chs1Parameters[1].InitAsConstantBufferView(0, 0); // Per instance buffer
     D3D12_ROOT_SIGNATURE_DESC chs1RootSignatureDesc = {};
     chs1RootSignatureDesc.Flags = D3D12_ROOT_SIGNATURE_FLAG_LOCAL_ROOT_SIGNATURE;
     chs1RootSignatureDesc.NumParameters = ARRAYSIZE(chs1Parameters);
@@ -426,8 +447,11 @@ bool Application::InitRaytracingPipelineObject()
     ExportAssociation closestHit1ExportAssociation(ARRAYSIZE(closestHit1ConfigExport), closestHit1ConfigExport, subobjects[index - 1]);
     subobjects[index++] = closestHit1ExportAssociation.stateSubobject; // 7
 
-    CD3DX12_ROOT_PARAMETER chsParameters[1];
-    chsParameters[0].InitAsConstantBufferView(0, 0);
+    CD3DX12_DESCRIPTOR_RANGE chsRanges[1];
+    chsRanges[0].Init(D3D12_DESCRIPTOR_RANGE_TYPE_SRV, 2, 1); // 1 - vertex buffer, 2 - index buffer
+    CD3DX12_ROOT_PARAMETER chsParameters[2];
+    chsParameters[0].InitAsDescriptorTable(ARRAYSIZE(chsRanges), chsRanges);
+    chsParameters[1].InitAsConstantBufferView(0, 0); // Per instance buffer
     D3D12_ROOT_SIGNATURE_DESC chsSignatureDesc = {};
     chsSignatureDesc.NumParameters = ARRAYSIZE(chsParameters);
     chsSignatureDesc.pParameters = chsParameters;
@@ -506,7 +530,7 @@ bool Application::InitRaytracingResources()
     ), false);
     mRaytracingResultResource->SetName(L"Raytracing texture");
 
-    auto heapResult = d3d->CreateDescriptorHeap(2, D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV, D3D12_DESCRIPTOR_HEAP_FLAG_SHADER_VISIBLE);
+    auto heapResult = d3d->CreateDescriptorHeap(4, D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV, D3D12_DESCRIPTOR_HEAP_FLAG_SHADER_VISIBLE);
     CHECK(heapResult.Valid(), false, "Unable to initialize raytracing descriptor heap");
     mDescriptorHeap = heapResult.Get();
     auto incrementSize = d3d->GetDescriptorIncrementSize<D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV>();
@@ -525,20 +549,50 @@ bool Application::InitRaytracingResources()
     srvDesc.ViewDimension = D3D12_SRV_DIMENSION::D3D12_SRV_DIMENSION_RAYTRACING_ACCELERATION_STRUCTURE;
     srvDesc.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
     d3d->CreateShaderResourceView(nullptr, srvDesc, cpuHandle);
+    cpuHandle.Offset(1, incrementSize);
+
+    auto vertices = Model::GetAllVertices();
+    srvDesc = {};
+    srvDesc.ViewDimension = D3D12_SRV_DIMENSION::D3D12_SRV_DIMENSION_BUFFER;
+    srvDesc.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
+    srvDesc.Format = DXGI_FORMAT_UNKNOWN;
+    srvDesc.Buffer.FirstElement = 0;
+    srvDesc.Buffer.Flags = D3D12_BUFFER_SRV_FLAG_NONE;
+    srvDesc.Buffer.NumElements = (uint32_t)vertices.size();
+    srvDesc.Buffer.StructureByteStride = sizeof(Model::Vertex);
+    d3d->CreateShaderResourceView(Model::GetCompleteVertexBuffer().Get(), srvDesc, cpuHandle);
+    cpuHandle.Offset(1, incrementSize);
+
+    auto indices = Model::GetAllIndices();
+    srvDesc = {};
+    srvDesc.ViewDimension = D3D12_SRV_DIMENSION::D3D12_SRV_DIMENSION_BUFFER;
+    srvDesc.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
+    srvDesc.Format = DXGI_FORMAT_UNKNOWN;
+    srvDesc.Buffer.FirstElement = 0;
+    srvDesc.Buffer.Flags = D3D12_BUFFER_SRV_FLAG_NONE;
+    srvDesc.Buffer.NumElements = (uint32_t)indices.size();
+    srvDesc.Buffer.StructureByteStride = sizeof(uint32_t);
+    d3d->CreateShaderResourceView(Model::GetCompleteIndexBuffer().Get(), srvDesc, cpuHandle);
+    cpuHandle.Offset(1, incrementSize);
 
     auto instanceCount = Model::GetTotalInstanceCount(mModels);
     CHECK(mClosestHitConstantBuffer.Init(instanceCount, true), false, "Unable to initialize constant buffer for chs");
-    DirectX::XMFLOAT4 allColors[] =
+    DirectX::XMFLOAT3 Colors[] =
     {
-        DirectX::XMFLOAT4(0.0f, 0.0f, 1.0f, 1.0f),
-        DirectX::XMFLOAT4(0.0f, 1.0f, 0.0f, 1.0f),
-        DirectX::XMFLOAT4(1.0f, 0.0f, 0.0f, 1.0f),
-        DirectX::XMFLOAT4(0.0f, 0.0f, 0.0f, 1.0f),
+        DirectX::XMFLOAT3(1.0f, 0.0f, 0.0f),
+        DirectX::XMFLOAT3(0.0f, 1.0f, 0.0f),
+        DirectX::XMFLOAT3(0.0f, 0.0f, 1.0f),
+        DirectX::XMFLOAT3(1.0f, 1.0f, 0.0f),
+        DirectX::XMFLOAT3(1.0f, 0.0f, 1.0f),
+        DirectX::XMFLOAT3(1.0f, 1.0f, 1.0f),
+        DirectX::XMFLOAT3(0.0f, 1.0f, 1.0f),
     };
     for (uint32_t i = 0; i < instanceCount; ++i)
     {
-        auto* colors = mClosestHitConstantBuffer.GetMappedMemory(i);
-        colors->Colors = allColors[i];
+        const auto& instanceInfo = Model::GetInstanceAtIndex(mModels, i);
+        ClosestHitConstantBuffer* cbData = mClosestHitConstantBuffer.GetMappedMemory(i);
+        cbData->World = DirectX::XMMatrixTranspose(instanceInfo.WorldMatrix);
+        cbData->Color = Colors[i];
     }
 
     return true;
